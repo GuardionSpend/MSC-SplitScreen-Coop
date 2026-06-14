@@ -126,6 +126,11 @@ mcs -noconfig -nostdlib -target:library -out:SplitScreenCoop.dll \
 Нашёл косяк или сделал сосиску круче? PR'ы и issue приветствуются.
 Только помни главное правило проекта: **сосиска — это святое.** 🌭
 
+## 👥 Авторы
+
+- [GuardionSpend](https://github.com/GuardionSpend) — автор мода
+- Контрибьютор: [NickIBrody](https://github.com/NickIBrody)
+
 ## 📜 Лицензия
 
 MIT — делай что хочешь, автор не виноват, если твоя сосиска улетит в стратосферу.
