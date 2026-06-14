@@ -10,6 +10,13 @@
  *    A ................ прыжок
  *    B ................ присесть (держать) — становишься ниже/уже
  *    Y ................ сесть/встать (у машины — пассажиром)
+ *    X ................ взять/положить предмет; на двери/кране — использовать
+ *
+ *  ЭКСПЕРИМЕНТАЛЬНО (взаимодействие игрока 2):
+ *    - Предметы берутся СВОИМ физическим захватом (не трогаем «руку» игры),
+ *      поэтому работает с любым физ-объектом, но не со сборкой/болтами.
+ *    - Двери/выключатели дёргаются через SendMessage("OnMouseDown") —
+ *      срабатывает на том, что использует мышиные события PlayMaker.
  *
  *  Резерв с КЛАВИАТУРЫ (нампад, не пересекается с игроком 1):
  *    8/2/4/6 движение, 7/9 поворот, 5 присед, 0 прыжок, . сесть.
@@ -30,7 +37,7 @@ namespace SplitScreenCoop
         public override string ID => "SplitScreenCoop";
         public override string Name => "Split Screen Co-op";
         public override string Author => "you";
-        public override string Version => "0.4.0";
+        public override string Version => "0.5.0";
         public override string Description => "Сплит-скрин: игрок 2 на геймпаде, со смешными лицами.";
 
         // ======================= НАСТРОЙКИ =======================
@@ -66,6 +73,10 @@ namespace SplitScreenCoop
         int p1Layer = -1, p2Layer = -1;
         ushort prevButtons;
 
+        Transform holdPoint;     // куда цепляется взятый предмет
+        Rigidbody heldRb;        // что держим
+        bool heldWasKinematic;   // вернуть состояние при отпускании
+
         public override void ModSetup()
         {
             SetupFunction(Setup.OnLoad, Mod_OnLoad);
@@ -92,6 +103,11 @@ namespace SplitScreenCoop
                 cam2.transform.SetParent(p2.transform);
                 cam2.transform.localPosition = new Vector3(0, 1.6f, 0);
                 cam2.transform.localRotation = Quaternion.identity;
+
+                holdPoint = new GameObject("SSC_Hold").transform;
+                holdPoint.SetParent(cam2.transform);
+                holdPoint.localPosition = new Vector3(0f, -0.15f, 0.9f);
+                holdPoint.localRotation = Quaternion.identity;
 
                 p1Layer = FindFreeLayer(8);
                 p2Layer = FindFreeLayer(p1Layer + 1);
@@ -125,20 +141,21 @@ namespace SplitScreenCoop
             if (Input.GetKeyDown(KeyCode.F8)) Diagnostics();
 
             float mx, mz, lx, ly;
-            bool jump, sit, crouchHeld;
-            ReadPlayer2(out mx, out mz, out lx, out ly, out jump, out sit, out crouchHeld);
+            bool jump, sit, crouchHeld, interact;
+            ReadPlayer2(out mx, out mz, out lx, out ly, out jump, out sit, out crouchHeld, out interact);
             crouch = crouchHeld;
 
             if (sit) ToggleSeat();
+            if (interact) DoInteract();   // взять/положить/использовать — можно и сидя
 
             HandleLook(lx, ly);            // крутить головой можно и сидя
             if (!seated) HandleMove(mx, mz, jump);
         }
 
         void ReadPlayer2(out float mx, out float mz, out float lx, out float ly,
-                         out bool jump, out bool sit, out bool crouchHeld)
+                         out bool jump, out bool sit, out bool crouchHeld, out bool interact)
         {
-            mx = mz = lx = ly = 0f; jump = sit = crouchHeld = false;
+            mx = mz = lx = ly = 0f; jump = sit = crouchHeld = interact = false;
 
             XINPUT_STATE st;
             if (TryGetXInput(0, out st))
@@ -152,6 +169,7 @@ namespace SplitScreenCoop
                 ushort b = g.wButtons;
                 jump       = Pressed(b, 0x1000); // A
                 sit        = Pressed(b, 0x8000); // Y
+                interact   = Pressed(b, 0x4000); // X
                 crouchHeld = (b & 0x2000) != 0;  // B
                 prevButtons = b;
             }
@@ -165,6 +183,7 @@ namespace SplitScreenCoop
                 if (Input.GetKey(KeyCode.Keypad9)) lx += 1f;
                 jump       = Input.GetKeyDown(KeyCode.Keypad0);
                 sit        = Input.GetKeyDown(KeyCode.KeypadPeriod);
+                interact   = Input.GetKeyDown(KeyCode.KeypadEnter);
                 crouchHeld = Input.GetKey(KeyCode.Keypad5);
             }
         }
@@ -226,6 +245,61 @@ namespace SplitScreenCoop
                 cc.enabled = true; seated = false;
                 ModConsole.Print("[SSC] встал.");
             }
+        }
+
+        // ---------------- ВЗАИМОДЕЙСТВИЕ ИГРОКА 2 ----------------
+        void DoInteract()
+        {
+            // держим предмет — отпускаем
+            if (heldRb != null) { Release(); return; }
+            if (cam2 == null) return;
+
+            // луч из камеры, начиная чуть впереди (чтобы не задеть своё тело)
+            Vector3 origin = cam2.transform.position + cam2.transform.forward * 0.35f;
+            int mask = ~0;
+            if (p2Layer >= 0) mask &= ~(1 << p2Layer);
+            if (p1Layer >= 0) mask &= ~(1 << p1Layer);
+
+            RaycastHit hit;
+            if (!Physics.Raycast(origin, cam2.transform.forward, out hit, 2.2f, mask))
+            { ModConsole.Print("[SSC] перед тобой ничего."); return; }
+
+            Rigidbody rb = hit.collider.attachedRigidbody;
+            bool grabbable = rb != null && !rb.isKinematic && rb.mass <= 40f
+                             && !rb.name.ToUpper().Contains("SATSUMA");
+
+            if (grabbable) Grab(rb);
+            else UseObject(hit.collider.gameObject); // дверь/кран/выключатель
+        }
+
+        void Grab(Rigidbody rb)
+        {
+            heldRb = rb;
+            heldWasKinematic = rb.isKinematic;
+            rb.isKinematic = true;
+            rb.transform.SetParent(holdPoint);
+            rb.transform.localPosition = Vector3.zero;
+            ModConsole.Print("[SSC] взял: " + rb.name);
+        }
+
+        void Release()
+        {
+            if (heldRb == null) return;
+            heldRb.transform.SetParent(null);
+            heldRb.isKinematic = heldWasKinematic;
+            // лёгкий толчок вперёд, чтобы предмет не залип в руке
+            heldRb.velocity = cam2.transform.forward * 1.0f;
+            ModConsole.Print("[SSC] положил: " + heldRb.name);
+            heldRb = null;
+        }
+
+        void UseObject(GameObject go)
+        {
+            // имитируем мышиное взаимодействие PlayMaker (двери/краны/выключатели)
+            go.SendMessage("OnMouseDown", SendMessageOptions.DontRequireReceiver);
+            go.SendMessage("OnMouseUp", SendMessageOptions.DontRequireReceiver);
+            go.SendMessage("OnMouseUpAsButton", SendMessageOptions.DontRequireReceiver);
+            ModConsole.Print("[SSC] использую: " + go.name);
         }
 
         // ---------------- КАМЕРЫ / СЛОИ ----------------
