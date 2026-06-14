@@ -37,7 +37,7 @@ namespace SplitScreenCoop
         public override string ID => "SplitScreenCoop";
         public override string Name => "Split Screen Co-op";
         public override string Author => "you";
-        public override string Version => "0.5.0";
+        public override string Version => "0.5.2";
         public override string Description => "Сплит-скрин: игрок 2 на геймпаде, со смешными лицами.";
 
         // ======================= НАСТРОЙКИ =======================
@@ -293,13 +293,41 @@ namespace SplitScreenCoop
             heldRb = null;
         }
 
+        // События взаимодействия MSC, вытащенные из ассетов игры.
+        // Двери/краны/выключатели — FSM с MousePickEvent: реагируют на
+        // системные мышиные события PlayMaker. Шлём весь набор — FSM сам
+        // игнорит то, что не подходит его текущему состоянию.
+        static readonly string[] USE_EVENTS = {
+            "MOUSE OVER", "MOUSE ENTER", "MOUSE DOWN", "MOUSE UP",
+            "MOUSE UP AS BUTTON", "MOUSE OFF", "MOUSE EXIT",
+            "Use", "USE", "use", "Open", "OPEN", "Close", "CLOSE",
+            "Switch", "Activate", "Press", "ON", "OFF", "FINISHED"
+        };
+
         void UseObject(GameObject go)
         {
-            // имитируем мышиное взаимодействие PlayMaker (двери/краны/выключатели)
-            go.SendMessage("OnMouseDown", SendMessageOptions.DontRequireReceiver);
-            go.SendMessage("OnMouseUp", SendMessageOptions.DontRequireReceiver);
-            go.SendMessage("OnMouseUpAsButton", SendMessageOptions.DontRequireReceiver);
-            ModConsole.Print("[SSC] использую: " + go.name);
+            // FSM может быть на самом объекте, на родителе или на дочернем
+            PlayMakerFSM[] up   = go.GetComponentsInParent<PlayMakerFSM>();
+            PlayMakerFSM[] down = go.GetComponentsInChildren<PlayMakerFSM>();
+            int sent = TriggerFsms(up) + TriggerFsms(down);
+
+            if (sent == 0)
+                ModConsole.Print("[SSC] '" + go.name + "': FSM не найден.");
+            else
+                ModConsole.Print("[SSC] use '" + go.name + "': дёрнул " + sent + " FSM.");
+        }
+
+        int TriggerFsms(PlayMakerFSM[] fsms)
+        {
+            if (fsms == null) return 0;
+            int n = 0;
+            foreach (PlayMakerFSM f in fsms)
+            {
+                if (f == null) continue;
+                foreach (string ev in USE_EVENTS) f.SendEvent(ev);
+                n++;
+            }
+            return n;
         }
 
         // ---------------- КАМЕРЫ / СЛОИ ----------------
